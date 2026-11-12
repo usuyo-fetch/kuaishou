@@ -17,6 +17,9 @@ upstream:
   - name: ParseHub（字段名）
     url: https://github.com/z-mio/ParseHub
     license: MIT
+  - name: KS-Downloader（用户自己装、自己运行，插件经本机 HTTP 调用它）
+    url: https://github.com/JoeanAmier/KS-Downloader
+    license: GPL-3.0
 platforms: [kuaishou]
 match:
   - "v.kuaishou.com/*"
@@ -36,9 +39,11 @@ methods:
       fetch:
         timeout: 30m
         outputs: [text, images, media:video, meta]
+  # ks-downloader 问你自己在本机运行的 KS-Downloader（GPL-3.0，API 模式，插件不带它、不下载它）：
+  # POST <endpoint>/detail/，请求体只有 text，不带 cookie；接口来自它 1.6 的源码，没有对真服务跑过，见 src/ksdownloader.rs 顶部。
+  # health 连不上服务时挡的是这一种方法，不挡整个插件。
   - id: ks-downloader
     name: KS-Downloader
-    built: false
     access: public-web
     login: none
     account: none
@@ -47,6 +52,7 @@ methods:
       source: {label: KS-Downloader, url: "https://github.com/JoeanAmier/KS-Downloader"}
     capabilities:
       fetch:
+        timeout: 10m
         outputs: [text, images, media:video, meta]
   - id: iphone
     name: iPhone 镜像
@@ -75,6 +81,8 @@ methods:
         order: unordered
         files: ["*.json", "*.jsonl", "*.zip"]
         reads: MediaCrawler 保存成 json 或 jsonl 的快手帖子文件（名字里带 contents；评论文件、CSV、SQLite 不读），或把 data 文件夹压成的 zip
+settings:
+  - {key: endpoint, label: KS-Downloader 服务地址, type: string, default: "http://127.0.0.1:5557"}
 pacing:
   kuaishou: {batch: true, interval: 8s, daily: 300}
 permissions:
@@ -84,6 +92,7 @@ permissions:
   network:
     mode: allowlist
     hosts:
+      - "${setting.endpoint}"
       - "v.kuaishou.com"
       - "www.kuaishou.com"
       - "v.m.chenzhongtech.com"

@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use anyhow::Context;
 use serde::Serialize;
 use usuyo_fetch_kuaishou::api::{Endpoints, Kuaishou};
-use usuyo_fetch_kuaishou::{canonical, mediacrawler, share};
+use usuyo_fetch_kuaishou::{canonical, ksdownloader, mediacrawler, share};
 use usuyo_plugin_kit::fetch::{Call, USAGE};
 use usuyo_plugin_kit::protocol::{CallFailure, Envelope, ErrorCode, FetchHealth};
 
@@ -20,7 +20,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// 分派到清单里的方法：只有 `share-page` 在插件进程里跑，其余几种还没做。
+/// 分派到清单里的方法：`share-page`、`ks-downloader`（问你本机的 KS-Downloader）、`mediacrawler`（读文件）在
+/// 插件进程里跑，其余几种还没做。
 fn run(args: &[String]) -> anyhow::Result<u8> {
     let Some(call) = Call::parse(args) else {
         eprintln!("{USAGE}");
@@ -36,16 +37,35 @@ fn run(args: &[String]) -> anyhow::Result<u8> {
                 input, out, want, ..
             },
         ) => emit(share::fetch(&api, &input, &out, want.as_deref())),
+        (
+            Some(ksdownloader::METHOD),
+            Call::Fetch {
+                input, out, want, ..
+            },
+        ) => emit(run_ks_downloader(&api, &input, &out, want.as_deref())),
         // 没有要查的本机程序，也不向平台发请求
         (Some("mediacrawler"), Call::List { source, cursor, .. }) => {
             emit(mediacrawler::list_call(&source, cursor.as_deref()))
         }
-        (_, Call::Health { .. }) => emit(Ok(FetchHealth::new(env!("CARGO_PKG_VERSION")))),
+        // 不向快手发请求；`ks-downloader` 的检查只连本机的那个服务
+        (_, Call::Health { .. }) => emit(Ok(ksdownloader::health(FetchHealth::new(env!(
+            "CARGO_PKG_VERSION"
+        ))))),
         (method, _) => emit::<()>(Err(CallFailure::new(
             ErrorCode::InvalidArgs,
             format!("this call does not apply to method {method:?}"),
         ))),
     }
+}
+
+fn run_ks_downloader(
+    api: &Kuaishou,
+    input: &str,
+    out: &std::path::Path,
+    want: Option<&[usuyo_plugin_kit::protocol::OutputKind]>,
+) -> Result<usuyo_plugin_kit::protocol::FetchOutput, CallFailure> {
+    let service = ksdownloader::Service::from_env()?;
+    ksdownloader::fetch(api, &service, input, out, want)
 }
 
 /// 把结果写成 stdout 上的那一个信封，返回退出码。

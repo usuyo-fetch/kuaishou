@@ -59,7 +59,10 @@ fn health_does_not_touch_the_network() {
         );
         assert_eq!(out["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(out["login"], serde_json::json!([]));
-        assert_eq!(out["checks"], serde_json::json!([]));
+        // 只有 `ks-downloader` 有检查，只连本机的服务；没在运行时只挡它自己
+        for check in out["checks"].as_array().unwrap() {
+            assert_eq!(check["methods"], serde_json::json!(["ks-downloader"]));
+        }
     }
 }
 
@@ -84,14 +87,6 @@ fn each_call_goes_to_its_method() {
     for args in [
         &["sources", "--method", "share-page"][..],
         &["list", "kuaishou:likes", "--method", "iphone"][..],
-        &[
-            "fetch",
-            "https://www.kuaishou.com/short-video/3x24h4gjvevux4w",
-            "--out",
-            "/o",
-            "--method",
-            "ks-downloader",
-        ][..],
         &[
             "fetch",
             "https://www.kuaishou.com/short-video/3x24h4gjvevux4w",
@@ -170,8 +165,13 @@ async fn the_manifest_loads_and_matches_kuaishou_links() {
     );
     assert!(share.built && share.sites.is_empty() && share.capabilities.fetch.is_some());
     assert!(share.on_by_default());
+    let ks = spec.method("ks-downloader").unwrap();
+    assert_eq!(
+        (ks.access, ks.login, ks.account),
+        (Access::PublicWeb, Login::None, Account::None)
+    );
+    assert!(ks.built && ks.capabilities.fetch.is_some() && ks.on_by_default());
     for (id, access, account) in [
-        ("ks-downloader", Access::PublicWeb, Account::None),
         ("iphone", Access::VisionUi, Account::OwnPhone),
         ("android", Access::VisionUi, Account::OwnPhone),
     ] {

@@ -1,0 +1,22 @@
+{
+  "message": "获取作品数据成功",
+  "params": {"text": "{LINK}", "cookies": null, "proxy": null},
+  "data": {
+    "collection_time": "2026-11-12_09:30:00",
+    "photoType": "图片",
+    "detailID": "{ID}",
+    "caption": "今天的三张照片",
+    "coverUrl": "{BASE}/img/cover.jpg",
+    "duration": "00:00:00",
+    "realLikeCount": 8,
+    "download": "{BASE}/img/a_0.jpg {BASE}/img/a_1.jpg {BASE}/img/a_2.jpg",
+    "timestamp": "2026-10-02_08:15:30",
+    "viewCount": -1,
+    "shareCount": 0,
+    "commentCount": 0,
+    "userSex": "女",
+    "authorID": "3xauthorsample02",
+    "name": "3xauthorsample02"
+  },
+  "time": "2026-11-12 09:30:01"
+}

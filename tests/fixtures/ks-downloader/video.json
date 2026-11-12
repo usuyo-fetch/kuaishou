@@ -1,0 +1,22 @@
+{
+  "message": "获取作品数据成功",
+  "params": {"text": "{LINK}", "cookies": null, "proxy": null},
+  "data": {
+    "collection_time": "2026-11-12_09:30:00",
+    "photoType": "视频",
+    "detailID": "{ID}",
+    "caption": "三台磨豆机，同一支豆子。 #手冲",
+    "coverUrl": "{BASE}/img/cover.jpg",
+    "duration": "00:02:29",
+    "realLikeCount": 1234,
+    "download": "{BASE}/media/video.mp4",
+    "timestamp": "2026-10-01_12:00:00",
+    "viewCount": 56789,
+    "shareCount": -1,
+    "commentCount": 17,
+    "userSex": "未知",
+    "authorID": "3xauthorsample01",
+    "name": "咖啡日常"
+  },
+  "time": "2026-11-12 09:30:01"
+}

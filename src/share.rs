@@ -38,13 +38,10 @@ const VIDEO_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const MAX_IMAGES: usize = 100;
 const TITLE_CHARS: usize = 100;
 
-/// 方法 `share-page`：读手机页里内嵌的数据。
-pub fn fetch(
-    api: &Kuaishou,
-    input: &str,
-    out: &Path,
+/// `--want` 的集合；没给是全要，要了本方法给不了的回 `invalid-args`。
+pub(crate) fn wanted_outputs(
     want: Option<&[OutputKind]>,
-) -> Result<FetchOutput, CallFailure> {
+) -> Result<BTreeSet<OutputKind>, CallFailure> {
     let wanted: BTreeSet<OutputKind> =
         want.map_or_else(|| OUTPUTS.into(), |w| w.iter().copied().collect());
     if let Some(other) = wanted.iter().find(|w| !OUTPUTS.contains(w)) {
@@ -53,17 +50,48 @@ pub fn fetch(
             format!("cannot give `{other}`"),
         ));
     }
+    Ok(wanted)
+}
+
+/// 方法 `share-page`：读手机页里内嵌的数据。
+pub fn fetch(
+    api: &Kuaishou,
+    input: &str,
+    out: &Path,
+    want: Option<&[OutputKind]>,
+) -> Result<FetchOutput, CallFailure> {
+    let wanted = wanted_outputs(want)?;
     let found = locate(api, input)?
         .ok_or_else(|| CallFailure::new(ErrorCode::UnsupportedInput, "not a kuaishou post link"))?;
     let id = found.id;
-    let identity = identity(&id)?;
 
     let fetched_at = Rfc3339::from_timestamp(jiff::Timestamp::now());
     let html = api.mobile_page(&id, found.query.as_deref())?;
     let parsed = page::parse(&html, &id).map_err(page_failure)?;
-    let post = parsed.post;
     write(out, "init-state.json", parsed.raw.as_bytes())?;
+    let evidence = Evidence {
+        fetched_at,
+        access: Access::PublicWeb,
+        site: None,
+        upstream: None,
+        status: Some(200),
+    };
+    deliver(api, out, &wanted, &id, &parsed.post, "手机页", evidence)
+}
 
+/// 读出的作品变成输出：下载封面、图片、视频，写 `meta.json`，算出缺什么。
+/// `share-page` 和 `ks-downloader` 都走这里，所以同一个作品两边给的身份、文件名一样；
+/// `source` 是数据从哪来的一个名词，写进 `missingReason`。
+pub(crate) fn deliver(
+    api: &Kuaishou,
+    out: &Path,
+    wanted: &BTreeSet<OutputKind>,
+    id: &str,
+    post: &Post,
+    source: &str,
+    evidence: Evidence,
+) -> Result<FetchOutput, CallFailure> {
+    let identity = identity(id)?;
     let mut output = FetchOutput {
         identity: Some(identity),
         kind: if post.is_image_post() {
@@ -71,7 +99,7 @@ pub fn fetch(
         } else {
             ItemKind::Video
         },
-        title: title(&post),
+        title: title(post),
         author: post.author.as_ref().map(|a| Author {
             name: a.name.clone(),
             platform_id: a.eid.clone().or_else(|| a.user_id.clone()),
@@ -94,13 +122,7 @@ pub fn fetch(
         completeness: Completeness::Partial,
         missing: Vec::new(),
         missing_reason: None,
-        evidence: Evidence {
-            fetched_at,
-            access: Access::PublicWeb,
-            site: None,
-            upstream: None,
-            status: Some(200),
-        },
+        evidence,
         credentials_update: None,
     };
 
@@ -118,7 +140,7 @@ pub fn fetch(
     if post.cover_url.is_none() && post.images.is_empty() {
         absent.insert(OutputKind::Images);
     } else if wanted.contains(&OutputKind::Images) {
-        images(api, out, &post, &mut output, &mut partial, &mut reasons)?;
+        images(api, out, post, &mut output, &mut partial, &mut reasons)?;
     }
     if post.is_image_post() {
         absent.insert(OutputKind::Video);
@@ -126,7 +148,7 @@ pub fn fetch(
         match &post.video {
             None => {
                 partial.insert(OutputKind::Video);
-                reasons.push("手机页没有给出视频地址".into());
+                reasons.push(format!("{source}没有给出视频地址"));
             }
             Some(video) => match download_video(api, out, &video.url) {
                 Ok(()) => output.media.push(Media {
@@ -148,7 +170,7 @@ pub fn fetch(
     write(
         out,
         "meta.json",
-        &serde_json::to_vec_pretty(&page::meta(&id, &post))
+        &serde_json::to_vec_pretty(&page::meta(id, post))
             .map_err(|e| CallFailure::new(ErrorCode::Internal, format!("meta.json: {e}")))?,
     )?;
 
@@ -277,7 +299,7 @@ fn rel(path: &str) -> Result<RelPath, CallFailure> {
     RelPath::try_from(path).map_err(|e| CallFailure::new(ErrorCode::Internal, e))
 }
 
-fn write(out: &Path, name: &str, bytes: &[u8]) -> Result<(), CallFailure> {
+pub(crate) fn write(out: &Path, name: &str, bytes: &[u8]) -> Result<(), CallFailure> {
     let dest = out.join(name);
     let io = |source| ApiError::Io {
         path: name.to_owned(),
