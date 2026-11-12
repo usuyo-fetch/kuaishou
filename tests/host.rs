@@ -151,9 +151,18 @@ async fn the_manifest_loads_and_matches_kuaishou_links() {
     assert_eq!(plugin.id().as_str(), "usuyo-fetch/kuaishou");
     assert_eq!(plugin.header.version.to_string(), env!("CARGO_PKG_VERSION"));
     let spec = &plugin.spec;
-    // routes.md 第 8 节的每一行，顺序照清单
+    // routes.md 第 8 节的每一行，加上 mediacrawler，顺序照清单
     let ids: Vec<&str> = spec.methods.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(ids, ["share-page", "ks-downloader", "iphone", "android"]);
+    assert_eq!(
+        ids,
+        [
+            "share-page",
+            "ks-downloader",
+            "iphone",
+            "android",
+            "mediacrawler"
+        ]
+    );
     let share = spec.method("share-page").unwrap();
     assert_eq!(
         (share.access, share.login, share.account),

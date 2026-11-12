@@ -4,5 +4,6 @@
 pub mod api;
 pub mod canonical;
 pub mod ids;
+pub mod mediacrawler;
 pub mod page;
 pub mod share;
