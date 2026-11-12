@@ -1,0 +1,80 @@
+# 快手获取插件：按一条分享链接取单个作品（视频、图文），不用账号。
+# 几种方法各列一项（usuyo 协议 §2.3.1），没做的也列；行和 usuyo 仓库 docs/platforms/routes.md 第 8 节一一对应。
+# share-page 读手机页 v.m.chenzhongtech.com/fw/photo/<id>（短链 v.kuaishou.com/<码> 跳去的那一页）里内嵌的 INIT_STATE，
+# 2026-11-12 量到不带 cookie 就有作品数据，见 src/page.rs 顶部；桌面页 www.kuaishou.com/short-video/<id> 只有壳，不用。
+protocol: 1
+id: usuyo-fetch/kuaishou
+kind: fetch
+name: 快手
+description: 按分享链接取单个作品的文字、作者、计数、封面、图片和视频（不用账号）
+version: 0.1.0
+license: MIT
+maintainers: [Fldicoahkiin]
+upstream:
+  - name: parse-video（快手分享页的解析）
+    url: https://github.com/wujunwei928/parse-video
+    license: MIT
+  - name: ParseHub（字段名）
+    url: https://github.com/z-mio/ParseHub
+    license: MIT
+platforms: [kuaishou]
+match:
+  - "v.kuaishou.com/*"
+  - "www.kuaishou.com/short-video/*"
+  - "www.kuaishou.com/f/*"
+  - "*.chenzhongtech.com/fw/*"
+methods:
+  - id: share-page
+    name: 分享页
+    access: public-web
+    login: none
+    account: none
+    risk:
+      text: 频繁请求会出验证页（parse-video 的 issue 里有 2001 antispam need captcha）；2026-11-12 不带 cookie 取一条短链和它的手机页都没有遇到
+      source: {label: "parse-video #36", url: "https://github.com/wujunwei928/parse-video/issues/36"}
+    capabilities:
+      fetch:
+        timeout: 30m
+        outputs: [text, images, media:video, meta]
+  - id: ks-downloader
+    name: KS-Downloader
+    built: false
+    access: public-web
+    login: none
+    account: none
+    risk:
+      text: 要一份不登录的网页 cookie；频繁请求要验证
+      source: {label: KS-Downloader, url: "https://github.com/JoeanAmier/KS-Downloader"}
+    capabilities:
+      fetch:
+        outputs: [text, images, media:video, meta]
+  - id: iphone
+    name: iPhone 镜像
+    built: false
+    access: vision-ui
+    login: required
+    account: own-phone
+    interaction: foreground
+  - id: android
+    name: 安卓手机
+    built: false
+    access: vision-ui
+    login: required
+    account: own-phone
+    interaction: foreground
+pacing:
+  kuaishou: {batch: true, interval: 8s, daily: 300}
+permissions:
+  fs:
+    write: ["${OUT}"]
+  network:
+    mode: allowlist
+    hosts:
+      - "v.kuaishou.com"
+      - "www.kuaishou.com"
+      - "v.m.chenzhongtech.com"
+      - "*.kwimgs.com"
+      - "*.yximgs.com"
+      - "*.kwaicdn.com"
+run:
+  command: ["${PLUGIN_DIR}/usuyo-fetch-kuaishou"]
