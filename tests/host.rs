@@ -59,10 +59,7 @@ fn health_does_not_touch_the_network() {
         );
         assert_eq!(out["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(out["login"], serde_json::json!([]));
-        // 只有 `ks-downloader` 有检查，只连本机的服务；没在运行时只挡它自己
-        for check in out["checks"].as_array().unwrap() {
-            assert_eq!(check["methods"], serde_json::json!(["ks-downloader"]));
-        }
+        assert!(out["checks"].as_array().is_none_or(Vec::is_empty));
     }
 }
 
@@ -146,18 +143,9 @@ async fn the_manifest_loads_and_matches_kuaishou_links() {
     assert_eq!(plugin.id().as_str(), "usuyo-fetch/kuaishou");
     assert_eq!(plugin.header.version.to_string(), env!("CARGO_PKG_VERSION"));
     let spec = &plugin.spec;
-    // routes.md 第 8 节的每一行，加上 mediacrawler，顺序照清单
+    // routes.md 第 8 节的每一行，顺序照清单
     let ids: Vec<&str> = spec.methods.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        [
-            "share-page",
-            "ks-downloader",
-            "iphone",
-            "android",
-            "mediacrawler"
-        ]
-    );
+    assert_eq!(ids, ["share-page", "iphone", "android"]);
     let share = spec.method("share-page").unwrap();
     assert_eq!(
         (share.access, share.login, share.account),
@@ -165,12 +153,6 @@ async fn the_manifest_loads_and_matches_kuaishou_links() {
     );
     assert!(share.built && share.sites.is_empty() && share.capabilities.fetch.is_some());
     assert!(share.on_by_default());
-    let ks = spec.method("ks-downloader").unwrap();
-    assert_eq!(
-        (ks.access, ks.login, ks.account),
-        (Access::PublicWeb, Login::None, Account::None)
-    );
-    assert!(ks.built && ks.capabilities.fetch.is_some() && ks.on_by_default());
     for (id, access, account) in [
         ("iphone", Access::VisionUi, Account::OwnPhone),
         ("android", Access::VisionUi, Account::OwnPhone),

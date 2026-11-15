@@ -80,7 +80,6 @@ pub fn fetch(
 }
 
 /// 读出的作品变成输出：下载封面、图片、视频，写 `meta.json`，算出缺什么。
-/// `share-page` 和 `ks-downloader` 都走这里，所以同一个作品两边给的身份、文件名一样；
 /// `source` 是数据从哪来的一个名词，写进 `missingReason`。
 pub(crate) fn deliver(
     api: &Kuaishou,
