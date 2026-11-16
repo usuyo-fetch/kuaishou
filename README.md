@@ -14,7 +14,7 @@
 
 ### share-page
 
-取单个作品：描述、作者、发布时间、计数、封面、图文的图片、视频、原始数据。读手机页 `v.m.chenzhongtech.com/fw/photo/<id>`（短链 `v.kuaishou.com/<码>` 跳去的那一页）里内嵌的 `INIT_STATE`，请求不带 cookie，不读宿主交来的凭据。桌面页 `www.kuaishou.com/short-video/<id>` 只有页面壳，不用。2026-11-12 不带 cookie 取一条短链和它的手机页都没有遇到验证页；频繁请求会出验证页。
+取单个作品：描述、作者、发布时间、计数、封面、图文的图片、视频、原始数据。读手机页 `v.m.chenzhongtech.com/fw/photo/<id>`（短链 `v.kuaishou.com/<码>` 跳去的那一页）里内嵌的 `INIT_STATE`，不读宿主交来的凭据；跟着短链跳转时，站点在跳转里用 `Set-Cookie` 发的 cookie（`did` 一类）只在这一次调用的内存里，带给后面主机对得上的跳转和手机页，不落盘；下载封面、图片、视频不带 cookie；直接给作品链接时不带任何 cookie。桌面页 `www.kuaishou.com/short-video/<id>` 只有页面壳，不用。2026-11-12 不带 cookie 取一条短链和它的手机页都没有遇到验证页；频繁请求会出验证页。
 
 ### iphone
 

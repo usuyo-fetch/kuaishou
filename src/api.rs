@@ -1,4 +1,6 @@
-//! 快手的 HTTP 请求：手机页、展开短链、下载封面图片和视频。都不带 cookie，不读宿主交来的凭据。
+//! 快手的 HTTP 请求：手机页、展开短链、下载封面图片和视频。不读宿主交来的凭据。
+//! 展开短链时站点在跳转里用 `Set-Cookie` 发的 cookie（`did` 一类）记在这一次调用的内存里（`CookieJar`），
+//! 只带给后面的短链跳转和手机页；不落盘，不进日志和报错，下载封面、图片、视频不带。
 //! 请求都经 `usuyo_plugin_kit::http`：每种请求只连自己那几台主机，只连公网地址。
 //! 手机页和短链不跟随跳转（自己一跳一跳读）；只有下载媒体跟随，每一跳都要在媒体主机名单里。
 
@@ -7,12 +9,12 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use url::Url;
-use usuyo_plugin_kit::http::{self, Client, Hosts, Policy};
+use usuyo_plugin_kit::http::{self, Client, Cookie, Hosts, Policy};
 use usuyo_plugin_kit::protocol::{CallFailure, ErrorCode, NotFoundReason, PluginEvent};
 
 use crate::ids::{Parsed, SHORT_LINK_HOST, WEB_HOST, is_kuaishou_host, parse_input};
 
-/// 手机 Safari 的 UA：手机页（`fw/photo/<id>`）用它取到了作品数据（2026-11-12 实测，不带 cookie）。
+/// 手机 Safari 的 UA：手机页（`fw/photo/<id>`）用它取到了作品数据（2026-11-12 实测，没有带 cookie）。
 const PAGE_USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
 /// 短链和媒体用普通桌面浏览器的 UA。
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
@@ -254,6 +256,111 @@ fn status_error(response: &http::Response) -> ApiError {
     }
 }
 
+/// 一次调用里站点发的 cookie：名字、值、能收到它的主机和路径。值不进 `Debug`。
+#[derive(Default)]
+pub struct CookieJar(Vec<StoredCookie>);
+
+struct StoredCookie {
+    name: String,
+    value: String,
+    /// 没有 `Domain` 时只有发它的主机收得到（`host_only`）；有就是它和它的子域。
+    domain: String,
+    host_only: bool,
+    path: String,
+}
+
+impl std::fmt::Debug for CookieJar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CookieJar({} cookies, <redacted>)", self.0.len())
+    }
+}
+
+impl CookieJar {
+    /// 记下 `from` 这个请求的回答里的一条 `Set-Cookie`。`Domain` 不是发它的主机或其上级的丢掉；
+    /// 读不出名字的丢掉。
+    fn store(&mut self, from: &Url, set_cookie: &str) {
+        let host = from.host_str().unwrap_or_default().to_ascii_lowercase();
+        let mut parts = set_cookie.split(';');
+        let Some((name, value)) = parts.next().and_then(|p| p.split_once('=')) else {
+            return;
+        };
+        let (name, value) = (name.trim(), value.trim());
+        if name.is_empty() {
+            return;
+        }
+        let mut domain = None;
+        let mut path = None;
+        for attr in parts {
+            let (key, val) = attr.split_once('=').unwrap_or((attr, ""));
+            let val = val.trim();
+            match key.trim().to_ascii_lowercase().as_str() {
+                "domain" => {
+                    domain = Some(val.trim_start_matches('.').to_ascii_lowercase());
+                }
+                "path" if val.starts_with('/') => path = Some(val.to_owned()),
+                _ => {}
+            }
+        }
+        let (domain, host_only) = match domain.filter(|d| !d.is_empty()) {
+            Some(d) if domain_matches(&host, &d) => (d, false),
+            Some(_) => return,
+            None => (host, true),
+        };
+        let path = path.unwrap_or_else(|| default_path(from.path()));
+        self.0
+            .retain(|c| !(c.name == name && c.domain == domain && c.path == path));
+        self.0.push(StoredCookie {
+            name: name.to_owned(),
+            value: value.to_owned(),
+            domain,
+            host_only,
+            path,
+        });
+    }
+
+    /// 发给 `url` 的 `Cookie` 请求头：主机和路径对得上的那几条；一条都没有就是 `None`。
+    /// 只给这一个主机，别的主机的那一跳不带（`usuyo_plugin_kit` 的 `Cookie` 也只认这一个名字）。
+    fn cookie_for(&self, url: &Url) -> Option<Cookie> {
+        let host = url.host_str()?.to_ascii_lowercase();
+        let pairs: Vec<String> = self
+            .0
+            .iter()
+            .filter(|c| {
+                let host_ok = if c.host_only {
+                    host == c.domain
+                } else {
+                    domain_matches(&host, &c.domain)
+                };
+                host_ok && path_matches(url.path(), &c.path)
+            })
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect();
+        (!pairs.is_empty()).then(|| Cookie::new(pairs.join("; "), [host]))
+    }
+}
+
+/// `host` 是 `domain` 本身或它的子域。
+fn domain_matches(host: &str, domain: &str) -> bool {
+    host == domain
+        || host
+            .strip_suffix(domain)
+            .is_some_and(|rest| rest.ends_with('.'))
+}
+
+fn default_path(request_path: &str) -> String {
+    match request_path.rfind('/') {
+        Some(0) | None => "/".to_owned(),
+        Some(i) => request_path[..i].to_owned(),
+    }
+}
+
+fn path_matches(request_path: &str, cookie_path: &str) -> bool {
+    request_path == cookie_path
+        || request_path
+            .strip_prefix(cookie_path)
+            .is_some_and(|rest| cookie_path.ends_with('/') || rest.starts_with('/'))
+}
+
 pub struct Kuaishou {
     endpoints: Endpoints,
 }
@@ -267,9 +374,15 @@ impl Kuaishou {
         &self.endpoints
     }
 
-    /// 取手机页 `fw/photo/<id>` 的 HTML；`query` 是分享链接上的参数，原样带上。
+    /// 取手机页 `fw/photo/<id>` 的 HTML；`query` 是分享链接上的参数，原样带上；
+    /// `cookies` 是展开短链时站点发的 cookie，主机对得上的才带（直接给作品链接时是空的）。
     /// 不跟跳转，状态不是 2xx 就报错，带着回答的开头。
-    pub fn mobile_page(&self, id: &str, query: Option<&str>) -> Result<String, ApiError> {
+    pub fn mobile_page(
+        &self,
+        id: &str,
+        query: Option<&str>,
+        cookies: &CookieJar,
+    ) -> Result<String, ApiError> {
         let mut url = self
             .endpoints
             .page_base
@@ -277,17 +390,20 @@ impl Kuaishou {
             .map_err(|e| ApiError::Shape(format!("bad page URL: {e}")))?;
         url.set_query(query);
         step("手机页");
-        let mut response = self
+        let client = self
             .endpoints
-            .client(PAGE_USER_AGENT, &[self.endpoints.page_host()])
+            .client(PAGE_USER_AGENT, &[self.endpoints.page_host()]);
+        let mut request = client
             .get(&url)
             .header(
                 "Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             )
-            .timeout(PAGE_TIMEOUT)
-            .send()
-            .map_err(transport)?;
+            .timeout(PAGE_TIMEOUT);
+        if let Some(cookie) = cookies.cookie_for(&url) {
+            request = request.cookie(&cookie);
+        }
+        let mut response = request.send().map_err(transport)?;
         if !(200..300).contains(&response.status()) {
             let e = status_error(&response);
             let head = response.read_to_vec(4096).unwrap_or_default();
@@ -300,7 +416,9 @@ impl Kuaishou {
     /// 展开短链：一跳一跳读 `Location`，只请求短链主机（`v.kuaishou.com`、`www.kuaishou.com`）。
     /// 落到作品页（或别的主机）就停，不请求作品页。
     /// 跳转只许落在快手自己的主机上：别的主机原样交回调用方，由它当作「不是快手的链接」。
-    pub fn expand_short_link(&self, start: Url) -> Result<Url, ApiError> {
+    /// 每一跳回答里的 `Set-Cookie` 记进返回的 `CookieJar`，带到后面主机对得上的跳转里。
+    pub fn expand_short_link(&self, start: Url) -> Result<(Url, CookieJar), ApiError> {
+        let mut jar = CookieJar::default();
         let mut current = start;
         for _ in 0..MAX_SHORT_LINK_HOPS {
             let host = current
@@ -308,15 +426,19 @@ impl Kuaishou {
                 .map(str::to_ascii_lowercase)
                 .unwrap_or_default();
             if !(self.endpoints.is_short_link_host(&host) || host == WEB_HOST) {
-                return Ok(current);
+                return Ok((current, jar));
             }
-            let mut response = self
+            let client = self
                 .endpoints
-                .client(USER_AGENT, &[SHORT_LINK_HOST, WEB_HOST])
-                .get(&current)
-                .timeout(SHORT_LINK_TIMEOUT)
-                .send()
-                .map_err(transport)?;
+                .client(USER_AGENT, &[SHORT_LINK_HOST, WEB_HOST]);
+            let mut request = client.get(&current).timeout(SHORT_LINK_TIMEOUT);
+            if let Some(cookie) = jar.cookie_for(&current) {
+                request = request.cookie(&cookie);
+            }
+            let mut response = request.send().map_err(transport)?;
+            for set_cookie in response.headers("set-cookie") {
+                jar.store(&current, set_cookie);
+            }
             let status = response.status();
             if !(300..400).contains(&status) {
                 if !(200..300).contains(&status) {
@@ -324,7 +446,7 @@ impl Kuaishou {
                     let head = response.read_to_vec(4096).unwrap_or_default();
                     return Err(e.answered(&head));
                 }
-                return Ok(current);
+                return Ok((current, jar));
             }
             let location = response
                 .header("location")
@@ -333,23 +455,23 @@ impl Kuaishou {
                 .join(location)
                 .map_err(|_| ApiError::Shape("`Location` is not a URL".into()))?;
             if !matches!(next.scheme(), "http" | "https") {
-                return Ok(next);
+                return Ok((next, jar));
             }
             // 只有快手自己的主机才继续；落在作品页上就停，作品页不在这里请求，交回去认 id
             let next_host = next.host_str().unwrap_or_default();
             if !is_kuaishou_host(next_host) && !self.endpoints.is_short_link_host(next_host) {
-                return Ok(next);
+                return Ok((next, jar));
             }
             match parse_input(next.as_str(), |h| self.endpoints.is_short_link_host(h)) {
                 Parsed::ShortLink(_) => current = next,
-                Parsed::Post { .. } | Parsed::Foreign => return Ok(next),
+                Parsed::Post { .. } | Parsed::Foreign => return Ok((next, jar)),
             }
         }
         Err(ApiError::Shape("too many redirects".into()))
     }
 
     /// 把一个文件流式存到 `dest`，最多 `limit` 字节。跟随跳转，每一跳都要在媒体主机名单里。
-    /// 不带 cookie。每秒向宿主报一次进度。
+    /// 不带 cookie（`CookieJar` 里的也不带）。每秒向宿主报一次进度。
     pub fn download(
         &self,
         url: &Url,
@@ -489,6 +611,64 @@ mod tests {
             Err(ApiError::Shape(_))
         ));
         assert!(matches!(ok("nonsense"), Err(ApiError::Shape(_))));
+    }
+
+    fn jar_with(from: &str, set_cookie: &str) -> CookieJar {
+        let mut jar = CookieJar::default();
+        jar.store(&Url::parse(from).unwrap(), set_cookie);
+        jar
+    }
+
+    fn sent(jar: &CookieJar, to: &str) -> bool {
+        jar.cookie_for(&Url::parse(to).unwrap()).is_some()
+    }
+
+    #[test]
+    fn cookies_go_only_to_the_hosts_they_belong_to() {
+        // 有 Domain：它和子域收得到，别的快手主机、CDN 收不到
+        let jar = jar_with(
+            "https://v.kuaishou.com/mkYOSR",
+            "did=web_x; Domain=.kuaishou.com; Path=/",
+        );
+        assert!(sent(&jar, "https://www.kuaishou.com/short-video/1"));
+        assert!(sent(&jar, "https://v.kuaishou.com/a"));
+        assert!(!sent(&jar, "https://v.m.chenzhongtech.com/fw/photo/1"));
+        assert!(!sent(&jar, "https://p5.a.yximgs.com/a.jpg"));
+        assert!(!sent(&jar, "https://evilkuaishou.com/a"));
+        // 没有 Domain：只有发它的主机
+        let jar = jar_with("https://v.kuaishou.com/mkYOSR", "did=web_x");
+        assert!(sent(&jar, "https://v.kuaishou.com/b"));
+        assert!(!sent(&jar, "https://www.kuaishou.com/b"));
+        // Domain 不是发它的主机的上级：丢掉
+        let jar = jar_with("https://v.kuaishou.com/x", "did=web_x; Domain=example.com");
+        assert!(!sent(&jar, "https://example.com/"));
+        assert!(!sent(&jar, "https://v.kuaishou.com/"));
+        // 路径
+        let jar = jar_with("https://v.kuaishou.com/x", "a=1; Path=/fw");
+        assert!(sent(&jar, "https://v.kuaishou.com/fw/photo/1"));
+        assert!(!sent(&jar, "https://v.kuaishou.com/fwx"));
+    }
+
+    #[test]
+    fn cookies_join_replace_and_stay_out_of_debug() {
+        let mut jar = jar_with("https://v.kuaishou.com/x", "did=old");
+        jar.store(&Url::parse("https://v.kuaishou.com/y").unwrap(), "kpf=H5");
+        jar.store(&Url::parse("https://v.kuaishou.com/z").unwrap(), "did=new");
+        jar.store(
+            &Url::parse("https://v.kuaishou.com/z").unwrap(),
+            "=nameless",
+        );
+        let cookie = jar
+            .cookie_for(&Url::parse("https://v.kuaishou.com/a").unwrap())
+            .unwrap();
+        assert_eq!(format!("{cookie:?}"), "Cookie(<redacted>)");
+        let stored: Vec<String> = jar
+            .0
+            .iter()
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect();
+        assert_eq!(stored, ["kpf=H5", "did=new"]);
+        assert!(!format!("{jar:?}").contains("new"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # 快手获取插件：按一条分享链接取单个作品（视频、图文），不用账号。
 # 几种方法各列一项（usuyo 协议 §2.3.1），没做的也列；行和 usuyo 仓库 docs/platforms/routes.md 第 8 节一一对应。
 # share-page 读手机页 v.m.chenzhongtech.com/fw/photo/<id>（短链 v.kuaishou.com/<码> 跳去的那一页）里内嵌的 INIT_STATE，
-# 2026-11-12 量到不带 cookie 就有作品数据，见 src/page.rs 顶部；桌面页 www.kuaishou.com/short-video/<id> 只有壳，不用。
+# 2026-11-12 量到没带 cookie 也有作品数据，见 src/page.rs 顶部；跟短链时站点发的 cookie 只在一次调用的内存里带给后面的页面主机，见 src/api.rs；桌面页 www.kuaishou.com/short-video/<id> 只有壳，不用。
 protocol: 1
 id: usuyo-fetch/kuaishou
 kind: fetch

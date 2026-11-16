@@ -126,6 +126,24 @@ fn kuaishou(req: &Request, base: &str) -> Response {
         "/f/X-aqEn4ZUlPtlME2" => Response::redirect(&format!(
             "https://www.kuaishou.com/short-video/{VIDEO}?fid=1&cc=share_copylink"
         )),
+        // 短链的回答里站点发了 cookie
+        "/with-cookie" => Response::redirect(&format!(
+            "https://v.m.chenzhongtech.com/fw/photo/{VIDEO}?cc=share_copylink"
+        ))
+        .header("Set-Cookie", "did=web_sample; Path=/; HttpOnly"),
+        // Domain 不是发它的主机或其上级
+        "/foreign-cookie" => Response::redirect(&format!(
+            "https://v.m.chenzhongtech.com/fw/photo/{VIDEO}?cc=share_copylink"
+        ))
+        .header("Set-Cookie", "did=web_sample; Domain=example.com; Path=/"),
+        // 第一跳发 cookie，第二跳（还在短链主机上）和手机页都带着它
+        // 两条 `Set-Cookie`：`did` 在第二条
+        "/hop-a" => Response::redirect("/hop-b")
+            .header("Set-Cookie", "clientid=3; Path=/")
+            .header("Set-Cookie", "did=web_hop; Path=/"),
+        "/hop-b" => Response::redirect(&format!(
+            "https://v.m.chenzhongtech.com/fw/photo/{VIDEO}?cc=share_copylink"
+        )),
         "/s1" => Response::redirect("/s2"),
         "/s2" => Response::redirect(&format!(
             "https://v.m.chenzhongtech.com/fw/photo/{VIDEO}?cc=share_copylink"
@@ -633,4 +651,80 @@ fn a_link_that_is_not_a_post_is_turned_away_without_a_request() {
         assert_eq!(f.code, ErrorCode::UnsupportedInput, "{input}");
     }
     assert!(server.requests().is_empty());
+}
+
+/// 每个请求的路径和带的 Cookie 头。
+fn cookies_sent(server: &Server) -> Vec<(String, Option<String>)> {
+    server
+        .requests()
+        .iter()
+        .map(|r| (r.path.clone(), r.cookie().map(str::to_owned)))
+        .collect()
+}
+
+#[test]
+fn a_cookie_sent_while_following_a_short_link_goes_to_the_next_hop_and_the_page_but_not_to_the_media()
+ {
+    let server = Server::start(kuaishou);
+    let api = api_for(&server);
+    let tmp = tempfile::tempdir().unwrap();
+    share::fetch(&api, &format!("{}/hop-a", server.base), tmp.path(), None).unwrap();
+    let sent = cookies_sent(&server);
+    let cookie_of = |path: &str| {
+        sent.iter()
+            .find(|(p, _)| p == path)
+            .unwrap_or_else(|| panic!("no request to {path}: {sent:?}"))
+            .1
+            .as_deref()
+    };
+    assert_eq!(cookie_of("/hop-a"), None);
+    assert_eq!(cookie_of("/hop-b"), Some("clientid=3; did=web_hop"));
+    assert_eq!(
+        cookie_of(&format!("/fw/photo/{VIDEO}")),
+        Some("clientid=3; did=web_hop")
+    );
+    // 封面、视频（含视频的跳转）不带，即使是同一台本机主机
+    for path in ["/img/cover.jpg", "/play/v1", "/cdn/video.mp4"] {
+        assert_eq!(cookie_of(path), None, "{path}");
+    }
+}
+
+#[test]
+fn a_cookie_whose_domain_is_not_the_answering_host_is_dropped() {
+    let server = Server::start(kuaishou);
+    let api = api_for(&server);
+    let tmp = tempfile::tempdir().unwrap();
+    share::fetch(
+        &api,
+        &format!("{}/foreign-cookie", server.base),
+        tmp.path(),
+        Some(&[OutputKind::Text]),
+    )
+    .unwrap();
+    assert!(cookies_sent(&server).iter().all(|(_, c)| c.is_none()));
+}
+
+#[test]
+fn the_cookie_does_not_outlive_the_call_and_a_direct_link_sends_none() {
+    let server = Server::start(kuaishou);
+    let api = api_for(&server);
+    let tmp = tempfile::tempdir().unwrap();
+    let text = Some(&[OutputKind::Text][..]);
+    share::fetch(
+        &api,
+        &format!("{}/with-cookie", server.base),
+        tmp.path(),
+        text,
+    )
+    .unwrap();
+    assert_eq!(
+        cookies_sent(&server)[1],
+        (format!("/fw/photo/{VIDEO}"), Some("did=web_sample".into()))
+    );
+    // 同一个 `Kuaishou` 再取一条直接给的作品链接：没有跳转，没有 cookie
+    let before = server.requests().len();
+    share::fetch(&api, &post_url(VIDEO), tmp.path(), text).unwrap();
+    let sent = cookies_sent(&server);
+    assert_eq!(sent.len(), before + 1);
+    assert_eq!(sent[before].1, None);
 }

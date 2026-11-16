@@ -1,5 +1,5 @@
-//! 方法 `share-page`：一条链接取一个作品（协议 §3.6、§3.7）。不带账号：这里的请求都不带 cookie，
-//! 也不读宿主交来的凭据。
+//! 方法 `share-page`：一条链接取一个作品（协议 §3.6、§3.7）。不带账号，不读宿主交来的凭据；
+//! 只有跟短链时站点发的 cookie 会带到后面的跳转和手机页（`api.rs`），下载封面、图片、视频不带 cookie。
 //!
 //! 输出目录里的文件名都是固定的，不用网络上来的名字：
 //! `init-state.json`（手机页里 `INIT_STATE` 的原文）、`meta.json`、`images/cover.<ext>`、
@@ -66,7 +66,7 @@ pub fn fetch(
     let id = found.id;
 
     let fetched_at = Rfc3339::from_timestamp(jiff::Timestamp::now());
-    let html = api.mobile_page(&id, found.query.as_deref())?;
+    let html = api.mobile_page(&id, found.query.as_deref(), &found.cookies)?;
     let parsed = page::parse(&html, &id).map_err(page_failure)?;
     write(out, "init-state.json", parsed.raw.as_bytes())?;
     let evidence = Evidence {
